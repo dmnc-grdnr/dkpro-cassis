@@ -219,8 +219,8 @@ def test_deep_copy_preserves_view_membership_for_non_annotation_fs(small_typesys
     xmi_orig = cas.to_xmi()
     cas_copy = cas.deep_copy()
 
-    view1_members = list(cas_copy.get_view("sofa1").select_all())
-    view2_members = list(cas_copy.get_view("sofa2").select_all())
+    view1_members = list(cas_copy.get_view("sofa1").select_all_fs())
+    view2_members = list(cas_copy.get_view("sofa2").select_all_fs())
 
     assert [fs.xmiID for fs in view1_members] == [4]
     assert [fs.xmiID for fs in view2_members] == [3]
@@ -251,8 +251,8 @@ def test_deep_copy_preserves_non_annotation_membership_in_multiple_views():
 
     cas_copy = cas.deep_copy()
 
-    view1_members = [fs.xmiID for fs in cas_copy.get_view("_InitialView").select_all()]
-    view2_members = [fs.xmiID for fs in cas_copy.get_view("sofa2").select_all()]
+    view1_members = [fs.xmiID for fs in cas_copy.get_view("_InitialView").select_all_fs()]
+    view2_members = [fs.xmiID for fs in cas_copy.get_view("sofa2").select_all_fs()]
 
     assert view1_members == [shared_array.xmiID]
     assert set(view2_members) == {annotation.xmiID, shared_array.xmiID}

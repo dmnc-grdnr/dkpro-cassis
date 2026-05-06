@@ -17,9 +17,18 @@ from cassis.typesystem import (
     TYPE_NAME_ANNOTATION,
     TYPE_NAME_ARRAY_BASE,
     TYPE_NAME_DOCUMENT_ANNOTATION,
+    TYPE_NAME_EMPTY_FLOAT_LIST,
+    TYPE_NAME_EMPTY_INTEGER_LIST,
+    TYPE_NAME_EMPTY_STRING_LIST,
+    TYPE_NAME_FLOAT_LIST,
     TYPE_NAME_FS_ARRAY,
     TYPE_NAME_FS_LIST,
+    TYPE_NAME_INTEGER_LIST,
+    TYPE_NAME_NON_EMPTY_FLOAT_LIST,
+    TYPE_NAME_NON_EMPTY_INTEGER_LIST,
+    TYPE_NAME_NON_EMPTY_STRING_LIST,
     TYPE_NAME_SOFA,
+    TYPE_NAME_STRING_LIST,
     FeatureStructure,
     Annotation,
     Type,
@@ -29,6 +38,18 @@ from cassis.typesystem import (
     is_annotation,
     load_typesystem,
 )
+
+_PRIMITIVE_LIST_BASE_TYPE = {
+    TYPE_NAME_INTEGER_LIST: TYPE_NAME_INTEGER_LIST,
+    TYPE_NAME_EMPTY_INTEGER_LIST: TYPE_NAME_INTEGER_LIST,
+    TYPE_NAME_NON_EMPTY_INTEGER_LIST: TYPE_NAME_INTEGER_LIST,
+    TYPE_NAME_FLOAT_LIST: TYPE_NAME_FLOAT_LIST,
+    TYPE_NAME_EMPTY_FLOAT_LIST: TYPE_NAME_FLOAT_LIST,
+    TYPE_NAME_NON_EMPTY_FLOAT_LIST: TYPE_NAME_FLOAT_LIST,
+    TYPE_NAME_STRING_LIST: TYPE_NAME_STRING_LIST,
+    TYPE_NAME_EMPTY_STRING_LIST: TYPE_NAME_STRING_LIST,
+    TYPE_NAME_NON_EMPTY_STRING_LIST: TYPE_NAME_STRING_LIST,
+}
 
 _validator_optional_string = validators.optional(validators.instance_of(str))
 
@@ -1088,7 +1109,7 @@ class Cas:
         referenced_view = defaultdict(list)
 
         for view in self.views:
-            for member in view.get_all_annotations():
+            for member in view.get_all_fs():
                 if hasattr(member, "xmiID") and member.xmiID is not None:
                     if view.sofa.sofaID not in referenced_view[member.xmiID]:
                         referenced_view[member.xmiID].append(view.sofa.sofaID)
@@ -1099,7 +1120,7 @@ class Cas:
         # members and any sofaArray roots here.
         traversal_seeds = []
         for sofa in self.sofas:
-            traversal_seeds.extend(self.get_view(sofa.sofaID).select_all())
+            traversal_seeds.extend(self.get_view(sofa.sofaID).select_all_fs())
             if getattr(sofa, "sofaArray", None) is not None:
                 traversal_seeds.append(sofa.sofaArray)
 
@@ -1108,19 +1129,19 @@ class Cas:
             fs_copy = t()
 
             if t.name == TYPE_NAME_FS_ARRAY and fs.elements is not None:
-                referenced_list = []
+                standalone_fs_array_member_ids = []
                 for item in fs.elements:
                     if item is None:
-                        referenced_list.append(None)
+                        standalone_fs_array_member_ids.append(None)
                     elif hasattr(item, "xmiID") and item.xmiID is not None:
-                        referenced_list.append(item.xmiID)
+                        standalone_fs_array_member_ids.append(item.xmiID)
                     else:
                         warnings.warn(
                             f"Standalone FSArray {fs.xmiID} contains an unidentifiable item; preserving as None in copy."
                         )
-                        referenced_list.append(None)
+                        standalone_fs_array_member_ids.append(None)
 
-                referenced_fs_arrays[fs.xmiID] = referenced_list
+                referenced_fs_arrays[fs.xmiID] = standalone_fs_array_member_ids
             elif t.supertype.name == TYPE_NAME_ARRAY_BASE and fs.elements is not None:
                 referenced_primitive_arrays[fs.xmiID] = list(fs.elements)
 
@@ -1140,12 +1161,15 @@ class Cas:
                         references[feature.name].append((fs.xmiID, val.xmiID))
                         continue
 
-                    # Distinguish primitive arrays (have `elements`) from primitive lists (use head/tail)
+                    # Distinguish primitive arrays (have `elements`) from primitive lists (use head/tail).
+                    # Lists may be declared with the abstract base type (e.g. IntegerList) or with a
+                    # concrete subtype (e.g. NonEmptyIntegerList); the lookup handles both.
+                    abstract_list_name = _PRIMITIVE_LIST_BASE_TYPE.get(feature.rangeType.name)
                     if ts.is_array(feature.rangeType):
                         fs_copy[feature.name] = ts.get_type(feature.rangeType.name)()
                         # shallow-copy the elements list to avoid sharing the same list object
                         fs_copy[feature.name].elements = list(val.elements)
-                    elif ts.is_list(feature.rangeType):
+                    elif abstract_list_name is not None:
                         # collect primitive values from head/tail style lists
                         current = val
                         prim_list = []
@@ -1154,11 +1178,18 @@ class Cas:
                             prim_list.append(head)
                             current = current.tail
 
-                        # store the primitive list values along with the declared range type name
+                        # store the primitive list values along with the abstract list base name
+                        # so the rebuild step can derive Empty*/NonEmpty* concrete type names.
                         referenced_primitive_lists.setdefault(fs.xmiID, {})
                         referenced_primitive_lists[fs.xmiID][feature.name] = (
-                            feature.rangeType.name,
+                            abstract_list_name,
                             prim_list,
+                        )
+                    else:
+                        warnings.warn(
+                            f"Primitive collection feature '{feature.name}' on FS {fs.xmiID} has range type "
+                            f"'{feature.rangeType.name}' which is neither a primitive array nor a primitive list; "
+                            "value not copied."
                         )
                 elif ts.is_array(feature.rangeType):
                     val = fs[feature.name]
@@ -1175,19 +1206,19 @@ class Cas:
                     else:
                         fs_copy[feature.name] = ts.get_type(TYPE_NAME_FS_ARRAY)()
                         # collect referenced xmiIDs for mapping later and preserve None placeholders
-                        referenced_list = []
+                        array_feature_member_ids = []
                         for item in val.elements:
                             if item is None:
-                                referenced_list.append(None)
+                                array_feature_member_ids.append(None)
                             elif hasattr(item, "xmiID") and item.xmiID is not None:
-                                referenced_list.append(item.xmiID)
+                                array_feature_member_ids.append(item.xmiID)
                             else:
                                 warnings.warn(
                                     f"Array feature '{feature.name}' of FS {fs.xmiID} contains an unidentifiable item; preserving as None in copy."
                                 )
-                                referenced_list.append(None)
+                                array_feature_member_ids.append(None)
                         referenced_arrays.setdefault(fs.xmiID, {})
-                        referenced_arrays[fs.xmiID][feature.name] = referenced_list
+                        referenced_arrays[fs.xmiID][feature.name] = array_feature_member_ids
                 elif ts.is_list(feature.rangeType):
                     val = fs[feature.name]
                     if val is None:
@@ -1230,9 +1261,9 @@ class Cas:
 
         # set references for objects in arrays
         for current_ID, arrays in referenced_arrays.items():
-            for feature, referenced_list in arrays.items():
+            for feature, array_member_ids in arrays.items():
                 elements = []
-                for reference_ID in referenced_list:
+                for reference_ID in array_member_ids:
                     if reference_ID is None:
                         elements.append(None)
                         continue
@@ -1245,9 +1276,9 @@ class Cas:
                         elements.append(None)
                 all_copied_fs[current_ID][feature].elements = elements
 
-        for current_ID, referenced_list in referenced_fs_arrays.items():
+        for current_ID, fs_array_member_ids in referenced_fs_arrays.items():
             elements = []
-            for reference_ID in referenced_list:
+            for reference_ID in fs_array_member_ids:
                 if reference_ID is None:
                     elements.append(None)
                     continue
@@ -1265,8 +1296,8 @@ class Cas:
 
         # rebuild FSList features from copied members
         for current_ID, lists in referenced_lists.items():
-            for feature, referenced_list in lists.items():
-                all_copied_fs[current_ID][feature] = _build_fs_list(referenced_list)
+            for feature, fs_list_member_ids in lists.items():
+                all_copied_fs[current_ID][feature] = _build_fs_list(fs_list_member_ids)
 
         # rebuild primitive head/tail lists (e.g. IntegerList, FloatList, StringList)
         for current_ID, lists in referenced_primitive_lists.items():

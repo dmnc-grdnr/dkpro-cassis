@@ -6,8 +6,16 @@ import attr
 from cassis.typesystem import (
     TYPE_NAME_ANNOTATION,
     TYPE_NAME_BYTE_ARRAY,
+    TYPE_NAME_EMPTY_FLOAT_LIST,
+    TYPE_NAME_EMPTY_FS_LIST,
+    TYPE_NAME_EMPTY_INTEGER_LIST,
+    TYPE_NAME_EMPTY_STRING_LIST,
+    TYPE_NAME_FS_LIST,
     TYPE_NAME_INTEGER,
     TYPE_NAME_INTEGER_ARRAY,
+    TYPE_NAME_NON_EMPTY_FLOAT_LIST,
+    TYPE_NAME_NON_EMPTY_INTEGER_LIST,
+    TYPE_NAME_NON_EMPTY_STRING_LIST,
     TYPE_NAME_STRING,
     TYPE_NAME_TOP,
     AnnotationHasNoSofa,
@@ -1628,3 +1636,158 @@ def test_deep_copy_should_remap_sofa_array():
 
     # The copy should not keep a direct reference to the original byte array
     assert cas_copy.get_sofa().sofaArray is not byte_array
+
+
+def test_deep_copy_empty_primitive_array():
+    """Ensure an empty primitive array feature is preserved as empty in the copy."""
+    typesystem = TypeSystem()
+    Foo = typesystem.create_type("test.Foo")
+    typesystem.create_feature(
+        Foo,
+        "ints",
+        rangeType=typesystem.get_type(TYPE_NAME_INTEGER_ARRAY),
+        elementType=typesystem.get_type(TYPE_NAME_INTEGER),
+        multipleReferencesAllowed=True,
+    )
+
+    cas = Cas(typesystem=typesystem)
+    foo = Foo()
+    int_arr = typesystem.get_type(TYPE_NAME_INTEGER_ARRAY)()
+    int_arr.elements = []
+    foo.ints = int_arr
+    cas.add(foo)
+
+    copy = cas.deep_copy(copy_typesystem=False)
+    copied_foo = list(copy.select("test.Foo"))[0]
+    assert copied_foo.ints.elements == []
+    assert copied_foo.ints is not int_arr
+
+
+def test_deep_copy_none_fslist_feature():
+    """Ensure an FSList feature set to None is preserved in the copy."""
+    typesystem = TypeSystem()
+    Item = typesystem.create_type("test.Item", supertypeName=TYPE_NAME_ANNOTATION)
+    Container = typesystem.create_type("test.Container", supertypeName=TYPE_NAME_ANNOTATION)
+    typesystem.create_feature(
+        Container,
+        "items",
+        rangeType=TYPE_NAME_FS_LIST,
+        elementType=Item,
+        multipleReferencesAllowed=False,
+    )
+
+    cas = Cas(typesystem=typesystem)
+    cas.sofa_string = "ab"
+    container = Container(begin=0, end=2)
+    container.items = None
+    cas.add(container)
+
+    copy = cas.deep_copy(copy_typesystem=False)
+    copied_container = copy.select("test.Container")[0]
+    assert getattr(copied_container, "items") is None
+
+
+def test_deep_copy_empty_fslist_feature():
+    """Ensure an empty FSList (EmptyFSList) is preserved as empty in the copy."""
+    typesystem = TypeSystem()
+    Item = typesystem.create_type("test.Item", supertypeName=TYPE_NAME_ANNOTATION)
+    Container = typesystem.create_type("test.Container", supertypeName=TYPE_NAME_ANNOTATION)
+    typesystem.create_feature(
+        Container,
+        "items",
+        rangeType=TYPE_NAME_FS_LIST,
+        elementType=Item,
+        multipleReferencesAllowed=False,
+    )
+
+    cas = Cas(typesystem=typesystem)
+    cas.sofa_string = "ab"
+    container = Container(begin=0, end=2)
+    container.items = _make_fs_list(typesystem)
+    cas.add(container)
+
+    copy = cas.deep_copy(copy_typesystem=False)
+    copied_container = copy.select("test.Container")[0]
+    assert copied_container.items is not None
+    assert copied_container.items.type.name == TYPE_NAME_EMPTY_FS_LIST
+    assert _fs_list_elements(copied_container.items) == []
+
+
+def test_deep_copy_with_nonempty_integer_list_range():
+    """Feature with rangeType NonEmptyIntegerList should preserve its head value across deep_copy."""
+    cas = Cas()
+    ts = cas.typesystem
+
+    MyType = ts.create_type("test.WithNonEmptyIntegerList")
+    ts.create_feature(MyType, name="ints", rangeType=TYPE_NAME_NON_EMPTY_INTEGER_LIST)
+
+    nonempty = ts.get_type(TYPE_NAME_NON_EMPTY_INTEGER_LIST)()
+    nonempty.head = 42
+    nonempty.tail = ts.get_type(TYPE_NAME_EMPTY_INTEGER_LIST)()
+
+    myfs = MyType()
+    myfs.ints = nonempty
+    cas.add(myfs)
+
+    copy = cas.deep_copy()
+    copied = list(copy.select("test.WithNonEmptyIntegerList"))[0]
+    assert copied.ints is not None
+    assert copied.ints.head == 42
+
+
+def test_deep_copy_with_nonempty_float_list_range():
+    """Feature with rangeType NonEmptyFloatList should preserve its head value across deep_copy."""
+    cas = Cas()
+    ts = cas.typesystem
+
+    MyType = ts.create_type("test.WithNonEmptyFloatList")
+    ts.create_feature(MyType, name="floats", rangeType=TYPE_NAME_NON_EMPTY_FLOAT_LIST)
+
+    nonempty = ts.get_type(TYPE_NAME_NON_EMPTY_FLOAT_LIST)()
+    nonempty.head = 3.14
+    nonempty.tail = ts.get_type(TYPE_NAME_EMPTY_FLOAT_LIST)()
+
+    myfs = MyType()
+    myfs.floats = nonempty
+    cas.add(myfs)
+
+    copy = cas.deep_copy()
+    copied = list(copy.select("test.WithNonEmptyFloatList"))[0]
+    assert copied.floats is not None
+    assert copied.floats.head == 3.14
+
+
+def test_deep_copy_with_nonempty_string_list_range():
+    """Feature with rangeType NonEmptyStringList should preserve its head value across deep_copy."""
+    cas = Cas()
+    ts = cas.typesystem
+
+    MyType = ts.create_type("test.WithNonEmptyStringList")
+    ts.create_feature(MyType, name="strings", rangeType=TYPE_NAME_NON_EMPTY_STRING_LIST)
+
+    nonempty = ts.get_type(TYPE_NAME_NON_EMPTY_STRING_LIST)()
+    nonempty.head = "hello"
+    nonempty.tail = ts.get_type(TYPE_NAME_EMPTY_STRING_LIST)()
+
+    myfs = MyType()
+    myfs.strings = nonempty
+    cas.add(myfs)
+
+    copy = cas.deep_copy()
+    copied = list(copy.select("test.WithNonEmptyStringList"))[0]
+    assert copied.strings is not None
+    assert copied.strings.head == "hello"
+
+
+def test_deep_copy_of_empty_cas():
+    """Ensure deep_copy works on a freshly initialized CAS with no user FS."""
+    cas = Cas()
+
+    copy = cas.deep_copy(copy_typesystem=False)
+
+    assert copy is not cas
+    assert [s.sofaID for s in copy.sofas] == [s.sofaID for s in cas.sofas]
+    for orig_sofa in cas.sofas:
+        copy_sofa = copy._sofas.get(orig_sofa.sofaID)
+        assert copy_sofa is not orig_sofa
+    assert list(copy._find_all_fs()) == []
